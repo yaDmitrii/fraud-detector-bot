@@ -253,26 +253,50 @@ class LLMProvider:
                         return None
                     
                     result = await resp.json()
-                    logger.debug(f"📦 Deepseek raw response: {str(result)[:300]}")
+                    logger.debug(f"📦 Deepseek raw response: {str(result)[:500]}")
                     
                     try:
-                        response_text = result["choices"]["message"]["content"]
-                        logger.debug(f"📝 Deepseek message: {response_text[:200]}")
+                        # ✅ ИСПРАВКА: Правильный парсинг
+                        if "choices" not in result:
+                            logger.error(f"❌ No 'choices' in response: {result}")
+                            return None
                         
+                        if not isinstance(result["choices"], list) or len(result["choices"]) == 0:
+                            logger.error(f"❌ 'choices' is not a list or empty: {result['choices']}")
+                            return None
+                        
+                        choice = result["choices"]
+                        
+                        if "message" not in choice:
+                            logger.error(f"❌ No 'message' in choice: {choice}")
+                            return None
+                        
+                        if "content" not in choice["message"]:
+                            logger.error(f"❌ No 'content' in message: {choice['message']}")
+                            return None
+                        
+                        response_text = choice["message"]["content"]
+                        logger.debug(f"📝 Deepseek message: {response_text[:300]}")
+                        
+                        # Парсим JSON
                         gpt_result = json.loads(response_text)
                         logger.info(f"✅ Successfully parsed Deepseek JSON: {gpt_result.get('fraud_type')}")
                         return gpt_result
                         
-                    except (json.JSONDecodeError, KeyError, IndexError) as e:
-                        logger.error(f"❌ Deepseek parse error: {e}")
-                        logger.error(f"   Response was: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ Deepseek JSON decode error: {e}")
+                        logger.error(f"   Response text: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
+                        return None
+                    except (KeyError, IndexError, TypeError) as e:
+                        logger.error(f"❌ Deepseek structure error: {type(e).__name__}: {e}")
+                        logger.error(f"   Full response: {result}")
                         return None
         
         except asyncio.TimeoutError:
             logger.error("❌ Deepseek timeout (15s)")
             return None
         except Exception as e:
-            logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}")
+            logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}", exc_info=True)
             return None
     
     # ════════════════════════════════════════
@@ -334,26 +358,50 @@ TEXT:
                         return None
                     
                     result = await resp.json()
-                    logger.debug(f"📦 ChatGPT raw response: {str(result)[:300]}")
+                    logger.debug(f"📦 ChatGPT raw response: {str(result)[:500]}")
                     
                     try:
-                        response_text = result["choices"]["message"]["content"]
-                        logger.debug(f"📝 ChatGPT message: {response_text[:200]}")
+                        # ✅ ИСПРАВКА: Правильный парсинг
+                        if "choices" not in result:
+                            logger.error(f"❌ No 'choices' in response: {result}")
+                            return None
                         
+                        if not isinstance(result["choices"], list) or len(result["choices"]) == 0:
+                            logger.error(f"❌ 'choices' is not a list or empty: {result['choices']}")
+                            return None
+                        
+                        choice = result["choices"]
+                        
+                        if "message" not in choice:
+                            logger.error(f"❌ No 'message' in choice: {choice}")
+                            return None
+                        
+                        if "content" not in choice["message"]:
+                            logger.error(f"❌ No 'content' in message: {choice['message']}")
+                            return None
+                        
+                        response_text = choice["message"]["content"]
+                        logger.debug(f"📝 ChatGPT message: {response_text[:300]}")
+                        
+                        # Парсим JSON
                         gpt_result = json.loads(response_text)
                         logger.info(f"✅ Successfully parsed ChatGPT JSON: {gpt_result.get('fraud_type')}")
                         return gpt_result
                         
-                    except (json.JSONDecodeError, KeyError, IndexError) as e:
-                        logger.error(f"❌ ChatGPT parse error: {e}")
-                        logger.error(f"   Response was: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ ChatGPT JSON decode error: {e}")
+                        logger.error(f"   Response text: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
+                        return None
+                    except (KeyError, IndexError, TypeError) as e:
+                        logger.error(f"❌ ChatGPT structure error: {type(e).__name__}: {e}")
+                        logger.error(f"   Full response: {result}")
                         return None
         
         except asyncio.TimeoutError:
             logger.error("❌ ChatGPT timeout (15s)")
             return None
         except Exception as e:
-            logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
+            logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}", exc_info=True)
             return None
 
 # ════════════════════════════════════════
