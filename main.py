@@ -197,11 +197,10 @@ class LLMProvider:
     # ════════════════════════════════════════
     # DEEPSEEK
     # ════════════════════════════════════════
-    
     async def _analyze_deepseek(self, text: str) -> Optional[dict]:
-        """Deepseek API"""
-        
-        prompt = f"""Ты эксперт в анализе мошеннических звонков в России.
+    """Deepseek API"""
+    
+    prompt = f"""Ты эксперт в анализе мошеннических звонков в России.
 
 Проанализируй текст разговора и определи:
 1. Тип мошенничества (credit/sim_swap/investment/utility/lottery/legitimate/unknown)
@@ -220,85 +219,77 @@ class LLMProvider:
 
 ТЕКСТ:
 {text}"""
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.deepseek_key}",
-                    "Content-Type": "application/json",
-                }
-                
-                payload = {
-                    "model": "deepseek-chat",
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 800
-                }
-                
-                logger.debug(f"📤 Sending request to Deepseek")
-                
-                async with session.post(
-                    "https://api.deepseek.com/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
-                ) as resp:
-                    logger.info(f"📥 Deepseek response status: {resp.status}")
-                    
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(f"❌ Deepseek HTTP error {resp.status}: {error_text[:200]}")
-                        return None
-                    
-                    result = await resp.json()
-                    logger.debug(f"📦 Deepseek raw response: {str(result)[:500]}")
-                    
-                    try:
-                        # ✅ ИСПРАВКА: Правильный парсинг
-                        if "choices" not in result:
-                            logger.error(f"❌ No 'choices' in response: {result}")
-                            return None
-                        
-                        if not isinstance(result["choices"], list) or len(result["choices"]) == 0:
-                            logger.error(f"❌ 'choices' is not a list or empty: {result['choices']}")
-                            return None
-                        
-                        choice = result["choices"]
-                        
-                        if "message" not in choice:
-                            logger.error(f"❌ No 'message' in choice: {choice}")
-                            return None
-                        
-                        if "content" not in choice["message"]:
-                            logger.error(f"❌ No 'content' in message: {choice['message']}")
-                            return None
-                        
-                        response_text = choice["message"]["content"]
-                        logger.debug(f"📝 Deepseek message: {response_text[:300]}")
-                        
-                        # Парсим JSON
-                        gpt_result = json.loads(response_text)
-                        logger.info(f"✅ Successfully parsed Deepseek JSON: {gpt_result.get('fraud_type')}")
-                        return gpt_result
-                        
-                    except json.JSONDecodeError as e:
-                        logger.error(f"❌ Deepseek JSON decode error: {e}")
-                        logger.error(f"   Response text: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
-                        return None
-                    except (KeyError, IndexError, TypeError) as e:
-                        logger.error(f"❌ Deepseek structure error: {type(e).__name__}: {e}")
-                        logger.error(f"   Full response: {result}")
-                        return None
-        
-        except asyncio.TimeoutError:
-            logger.error("❌ Deepseek timeout (15s)")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}", exc_info=True)
-            return None
     
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {self.deepseek_key}",
+                "Content-Type": "application/json",
+            }
+            
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 800
+            }
+            
+            logger.debug(f"📤 Sending request to Deepseek")
+            
+            async with session.post(
+                "https://api.deepseek.com/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
+            ) as resp:
+                logger.info(f"📥 Deepseek response status: {resp.status}")
+                
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    logger.error(f"❌ Deepseek HTTP error {resp.status}: {error_text[:200]}")
+                    return None
+                
+                result = await resp.json()
+                logger.debug(f"📦 Deepseek raw response: {str(result)[:500]}")
+                
+                try:
+                    # Парсим ответ
+                    if isinstance(result, dict) and "choices" in result:
+                        choices = result.get("choices", [])
+                        if isinstance(choices, list) and len(choices) > 0:
+                            choice = choices
+                            
+                            # Проверяем структуру
+                            if isinstance(choice, dict) and "message" in choice:
+                                message = choice.get("message", {})
+                                if isinstance(message, dict) and "content" in message:
+                                    response_text = message.get("content", "")
+                                    logger.debug(f"📝 Deepseek message: {response_text[:300]}")
+                                    
+                                    # Парсим JSON
+                                    gpt_result = json.loads(response_text)
+                                    logger.info(f"✅ Successfully parsed Deepseek JSON: {gpt_result.get('fraud_type')}")
+                                    return gpt_result
+                    
+                    logger.error(f"❌ Unexpected Deepseek response structure: {result}")
+                    return None
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Deepseek JSON decode error: {e}")
+                    return None
+                except Exception as e:
+                    logger.error(f"❌ Deepseek parse error: {type(e).__name__}: {e}")
+                    return None
+    
+    except asyncio.TimeoutError:
+        logger.error("❌ Deepseek timeout (15s)")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}", exc_info=True)
+        return None
+   
     # ════════════════════════════════════════
     # CHATGPT (OpenAI)
     # ════════════════════════════════════════
@@ -334,7 +325,7 @@ TEXT:
                 }
                 
                 payload = {
-                    "model": "gpt-4-mini",
+                    "model": "gpt-5-nano",
                     "messages": [
                         {"role": "user", "content": prompt}
                     ],
@@ -657,3 +648,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
