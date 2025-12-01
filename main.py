@@ -173,16 +173,20 @@ class LLMProvider:
         
         # ШАГ 1: Пытаемся Deepseek (быстро, дешево)
         if self.deepseek_key:
+            logger.info("🔄 Trying Deepseek...")
             result = await self._analyze_deepseek(text)
             if result:
+                logger.info("✅ Deepseek успешно вернул результат")
                 result["provider"] = "deepseek"
                 return result
             logger.warning("⚠️ Deepseek failed, trying ChatGPT...")
         
         # ШАГ 2: Fallback на ChatGPT
         if self.chatgpt_key:
+            logger.info("🔄 Trying ChatGPT...")
             result = await self._analyze_chatgpt(text)
             if result:
+                logger.info("✅ ChatGPT успешно вернул результат")
                 result["provider"] = "chatgpt"
                 return result
             logger.warning("⚠️ ChatGPT failed")
@@ -233,31 +237,42 @@ class LLMProvider:
                     "max_tokens": 800
                 }
                 
+                logger.debug(f"📤 Sending request to Deepseek")
+                
                 async with session.post(
                     "https://api.deepseek.com/chat/completions",
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
                 ) as resp:
+                    logger.info(f"📥 Deepseek response status: {resp.status}")
+                    
                     if resp.status != 200:
-                        logger.warning(f"Deepseek error: {resp.status}")
+                        error_text = await resp.text()
+                        logger.error(f"❌ Deepseek HTTP error {resp.status}: {error_text[:200]}")
                         return None
                     
                     result = await resp.json()
-                    response_text = result["choices"]["message"]["content"]
+                    logger.debug(f"📦 Deepseek raw response: {str(result)[:300]}")
                     
                     try:
+                        response_text = result["choices"]["message"]["content"]
+                        logger.debug(f"📝 Deepseek message: {response_text[:200]}")
+                        
                         gpt_result = json.loads(response_text)
+                        logger.info(f"✅ Successfully parsed Deepseek JSON: {gpt_result.get('fraud_type')}")
                         return gpt_result
-                    except json.JSONDecodeError:
-                        logger.error(f"Deepseek JSON parse error: {response_text[:100]}")
+                        
+                    except (json.JSONDecodeError, KeyError, IndexError) as e:
+                        logger.error(f"❌ Deepseek parse error: {e}")
+                        logger.error(f"   Response was: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
                         return None
         
         except asyncio.TimeoutError:
-            logger.warning("Deepseek timeout")
+            logger.error("❌ Deepseek timeout (15s)")
             return None
         except Exception as e:
-            logger.error(f"Deepseek exception: {e}")
+            logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}")
             return None
     
     # ════════════════════════════════════════
@@ -303,31 +318,42 @@ TEXT:
                     "max_tokens": 800
                 }
                 
+                logger.debug(f"📤 Sending request to ChatGPT")
+                
                 async with session.post(
                     "https://api.openai.com/v1/chat/completions",
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
                 ) as resp:
+                    logger.info(f"📥 ChatGPT response status: {resp.status}")
+                    
                     if resp.status != 200:
-                        logger.warning(f"ChatGPT error: {resp.status}")
+                        error_text = await resp.text()
+                        logger.error(f"❌ ChatGPT HTTP error {resp.status}: {error_text[:200]}")
                         return None
                     
                     result = await resp.json()
-                    response_text = result["choices"]["message"]["content"]
+                    logger.debug(f"📦 ChatGPT raw response: {str(result)[:300]}")
                     
                     try:
+                        response_text = result["choices"]["message"]["content"]
+                        logger.debug(f"📝 ChatGPT message: {response_text[:200]}")
+                        
                         gpt_result = json.loads(response_text)
+                        logger.info(f"✅ Successfully parsed ChatGPT JSON: {gpt_result.get('fraud_type')}")
                         return gpt_result
-                    except json.JSONDecodeError:
-                        logger.error(f"ChatGPT JSON parse error: {response_text[:100]}")
+                        
+                    except (json.JSONDecodeError, KeyError, IndexError) as e:
+                        logger.error(f"❌ ChatGPT parse error: {e}")
+                        logger.error(f"   Response was: {response_text[:300] if 'response_text' in locals() else 'N/A'}")
                         return None
         
         except asyncio.TimeoutError:
-            logger.warning("ChatGPT timeout")
+            logger.error("❌ ChatGPT timeout (15s)")
             return None
         except Exception as e:
-            logger.error(f"ChatGPT exception: {e}")
+            logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
             return None
 
 # ════════════════════════════════════════
@@ -445,6 +471,9 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Основной анализ текста"""
     
     text = update.message.text
+    user_id = update.effective_user.id
+    
+    logger.info(f"📨 New message from user {user_id}: {text[:50]}...")
     
     # Проверяем длину
     if len(text) < MIN_TEXT_LENGTH:
@@ -459,7 +488,9 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # ШАГ 1: Локальный анализ (быстро, ~100ms)
+        logger.info("🔄 Starting local analysis...")
         local_result = FraudAnalyzer.analyze_text(text)
+        logger.info(f"✅ Local analysis done: {local_result.get('fraud_type')} ({local_result.get('risk_level')})")
         
         # ШАГ 2: GPT анализ (дополнительный)
         await status_msg.edit_text(
@@ -470,13 +501,20 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         gpt_result = None
         if llm_provider:
+            logger.info("🔄 Requesting LLM analysis...")
             gpt_result = await llm_provider.analyze(text)
+            if gpt_result:
+                logger.info(f"✅ LLM analysis done: {gpt_result.get('provider')}")
+            else:
+                logger.warning("⚠️ LLM analysis returned None")
         
         # ШАГ 3: Комбинируем результаты
         if gpt_result:
             final_result = gpt_result
+            logger.info(f"📊 Using LLM result: {gpt_result.get('provider')}")
         else:
             final_result = local_result
+            logger.info("📊 Using local result (LLM failed)")
         
         # ШАГ 4: Форматируем ответ
         risk_emoji = {
@@ -510,9 +548,10 @@ async def analyze_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         await status_msg.edit_text(response, parse_mode="HTML")
+        logger.info(f"✅ Response sent to user {user_id}")
         
     except Exception as e:
-        logger.error(f"Analysis error: {e}")
+        logger.error(f"❌ Analysis error: {type(e).__name__}: {e}", exc_info=True)
         await status_msg.edit_text(
             f"❌ Ошибка при анализе:\n{str(e)[:100]}\n\n"
             "Попробуй ещё раз."
@@ -537,12 +576,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Запуск бота"""
     
+    logger.info("=" * 50)
+    logger.info("🤖 Starting GuardCall Bot...")
+    logger.info("=" * 50)
+    
     # Создаём приложение
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Post-init callback
     async def post_init(context):
+        logger.info("🔄 Initializing bot...")
         await initialize_llm()
+        logger.info("✅ Bot initialization complete!")
     
     app.post_init = post_init
     
@@ -556,9 +601,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_message))
     
     # Запускаем
-    print("🤖 Бот запущен!")
-    print(f"📱 Откройте: https://t.me/YOUR_BOT_USERNAME")
-    print("=" * 50)
+    logger.info("🤖 Bot is running!")
+    logger.info(f"📱 Open: https://t.me/guardcallbot")
+    logger.info("=" * 50)
     
     app.run_polling()
 
