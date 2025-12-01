@@ -283,9 +283,9 @@ class LLMProvider:
     # ════════════════════════════════════════
     
     async def _analyze_chatgpt(self, text: str) -> Optional[dict]:
-        """ChatGPT API (OpenAI) с gpt-5-nano"""
-        
-        prompt = f"""Analyze this phone call text for scam/fraud in Russian context.
+    """ChatGPT API (OpenAI) с gpt-5-nano и max_completion_tokens"""
+    
+    prompt = f"""Analyze this phone call text for scam/fraud in Russian context.
 
 Determine:
 1. Fraud type (credit/sim_swap/investment/utility/lottery/legitimate/unknown)
@@ -304,63 +304,75 @@ Answer ONLY as JSON (no markdown):
 
 TEXT:
 {text}"""
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.chatgpt_key}",
-                    "Content-Type": "application/json",
-                }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {self.chatgpt_key}",
+                "Content-Type": "application/json",
+            }
+            
+            # ✅ ИСПРАВКА: Используем max_completion_tokens вместо max_tokens
+            payload = {
+                "model": "gpt-5-nano",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.7,
+                "max_completion_tokens": 800
+            }
+            
+            logger.debug("📤 Sending request to ChatGPT")
+            
+            async with session.post(
+                "https://api.openai.com/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
+            ) as resp:
+                logger.info(f"📥 ChatGPT response status: {resp.status}")
                 
-                payload = {
-                    "model": "gpt-5-nano",
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 800
-                }
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    logger.error(f"❌ ChatGPT HTTP error {resp.status}: {error_text[:200]}")
+                    return None
                 
-                logger.debug("📤 Sending request to ChatGPT")
+                result = await resp.json()
                 
-                async with session.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
-                ) as resp:
-                    logger.info(f"📥 ChatGPT response status: {resp.status}")
-                    
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        logger.error(f"❌ ChatGPT HTTP error {resp.status}: {error_text[:200]}")
+                # Парсим JSON безопасно
+                try:
+                    if not isinstance(result, dict):
+                        logger.error(f"❌ Result is not dict: {type(result)}")
                         return None
                     
-                    result = await resp.json()
-                    
-                    # Парсим JSON безопасно
-                    try:
-                        response_text = result.get("choices", [{}]).get("message", {}).get("content", "")
-                        
-                        if not response_text:
-                            logger.error("❌ Empty content from ChatGPT")
-                            return None
-                        
-                        logger.debug(f"📝 ChatGPT message: {response_text[:200]}")
-                        gpt_result = json.loads(response_text)
-                        logger.info(f"✅ Successfully parsed ChatGPT JSON")
-                        return gpt_result
-                        
-                    except (json.JSONDecodeError, IndexError, TypeError, KeyError) as e:
-                        logger.error(f"❌ ChatGPT parse error: {type(e).__name__}: {e}")
+                    choices = result.get("choices", [])
+                    if not isinstance(choices, list) or len(choices) == 0:
+                        logger.error(f"❌ No choices in result")
                         return None
-        
-        except asyncio.TimeoutError:
-            logger.error("❌ ChatGPT timeout")
-            return None
-        except Exception as e:
-            logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
-            return None
+                    
+                    first_choice = choices  # Это словарь
+                    message = first_choice.get("message", {})
+                    content = message.get("content", "")
+                    
+                    if not content:
+                        logger.error("❌ Empty content from ChatGPT")
+                        return None
+                    
+                    logger.debug(f"📝 ChatGPT message: {content[:200]}")
+                    gpt_result = json.loads(content)
+                    logger.info(f"✅ Successfully parsed ChatGPT JSON")
+                    return gpt_result
+                    
+                except (json.JSONDecodeError, KeyError, TypeError, IndexError) as e:
+                    logger.error(f"❌ ChatGPT parse error: {type(e).__name__}: {e}")
+                    return None
+    
+    except asyncio.TimeoutError:
+        logger.error("❌ ChatGPT timeout")
+        return None
+    except Exception as e:
+        logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
+        return None
 
 # ════════════════════════════════════════
 # ГЛОБАЛЬНЫЙ LLM ПРОВАЙДЕР
@@ -615,3 +627,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
