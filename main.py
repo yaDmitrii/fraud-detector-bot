@@ -170,13 +170,11 @@ class LLMProvider:
     
     async def analyze(self, text: str) -> Optional[dict]:
         """Анализируем с fallback стратегией"""
-        
         # ШАГ 1: Пытаемся Deepseek (быстро, дешево)
         if self.deepseek_key:
             logger.info("🔄 Trying Deepseek...")
             result = await self._analyze_deepseek(text)
             if result:
-                logger.info("✅ Deepseek успешно вернул результат")
                 result["provider"] = "deepseek"
                 return result
             logger.warning("⚠️ Deepseek failed, trying ChatGPT...")
@@ -186,21 +184,18 @@ class LLMProvider:
             logger.info("🔄 Trying ChatGPT...")
             result = await self._analyze_chatgpt(text)
             if result:
-                logger.info("✅ ChatGPT успешно вернул результат")
                 result["provider"] = "chatgpt"
                 return result
             logger.warning("⚠️ ChatGPT failed")
         
         logger.error("❌ All LLM providers failed")
         return None
-    
+
     # ════════════════════════════════════════
     # DEEPSEEK
     # ════════════════════════════════════════
-    
     async def _analyze_deepseek(self, text: str) -> Optional[dict]:
         """Deepseek API с правильным парсингом"""
-        
         prompt = f"""Ты эксперт в анализе мошеннических звонков в России.
 
 Проанализируй текст разговора и определи:
@@ -209,7 +204,7 @@ class LLMProvider:
 3. Признаки скама (список, 3-5 штук)
 4. Рекомендацию (что делать)
 
-Ответь ТОЛЬКО JSON (без маркдауна, без ```
+Ответь ТОЛЬКО JSON (без маркдауна, без ```):
 {{
   "fraud_type": "...",
   "risk_level": "low|medium|high",
@@ -220,14 +215,12 @@ class LLMProvider:
 
 ТЕКСТ:
 {text}"""
-        
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "Authorization": f"Bearer {self.deepseek_key}",
                     "Content-Type": "application/json",
                 }
-                
                 payload = {
                     "model": "deepseek-chat",
                     "messages": [
@@ -236,9 +229,7 @@ class LLMProvider:
                     "temperature": 0.3,
                     "max_tokens": 800
                 }
-                
                 logger.debug("📤 Sending request to Deepseek")
-                
                 async with session.post(
                     "https://api.deepseek.com/chat/completions",
                     json=payload,
@@ -246,110 +237,112 @@ class LLMProvider:
                     timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
                 ) as resp:
                     logger.info(f"📥 Deepseek response status: {resp.status}")
-                    
                     if resp.status != 200:
                         error_text = await resp.text()
                         logger.error(f"❌ Deepseek HTTP error {resp.status}: {error_text[:200]}")
                         return None
-                    
                     result = await resp.json()
-                    
                     # Парсим JSON безопасно
                     try:
-                        response_text = result.get("choices", [{}]).get("message", {}).get("content", "")
-                        
+                        choices = result.get("choices", [])
+                        if not choices:
+                            logger.error("❌ Deepseek: no choices")
+                            return None
+                        message = choices[0].get("message", {}) or {}
+                        response_text = message.get("content", "")
                         if not response_text:
                             logger.error("❌ Empty content from Deepseek")
                             return None
-                        
                         logger.debug(f"📝 Deepseek message: {response_text[:200]}")
                         gpt_result = json.loads(response_text)
-                        logger.info(f"✅ Successfully parsed Deepseek JSON")
+                        logger.info("✅ Successfully parsed Deepseek JSON")
                         return gpt_result
-                        
                     except (json.JSONDecodeError, IndexError, TypeError, KeyError) as e:
                         logger.error(f"❌ Deepseek parse error: {type(e).__name__}: {e}")
                         return None
-        
         except asyncio.TimeoutError:
             logger.error("❌ Deepseek timeout")
             return None
         except Exception as e:
             logger.error(f"❌ Deepseek exception: {type(e).__name__}: {e}")
             return None
-    
+
     # ════════════════════════════════════════
     # CHATGPT (OpenAI)
     # ════════════════════════════════════════
-    
-async def _analyze_chatgpt(self, text: str) -> Optional[dict]:
-    """ChatGPT API (OpenAI) с gpt-5-nano и max_completion_tokens"""
-
-    prompt = f"""Analyze this phone call text for scam/fraud in Russian context.
+    async def _analyze_chatgpt(self, text: str) -> Optional[dict]:
+        """ChatGPT API (OpenAI) с gpt-5-nano и max_completion_tokens"""
+        prompt = f"""Analyze this phone call text for scam/fraud in Russian context.
 
 Determine:
 1. Fraud type (credit/sim_swap/investment/utility/lottery/legitimate/unknown)
 2. Risk level (low/medium/high)
 3. Scam indicators (3-5 items)
-4. Recommendation
+4. Recommendation for user
 
-Answer ONLY JSON:
+Answer ONLY as JSON (no markdown):
 {{
   "fraud_type": "...",
-  "risk_level": "low",
-  "red_flags": ["flag1"],
-  "recommendation": "...",
+  "risk_level": "low|medium|high",
+  "red_flags": ["flag1", "flag2"],
+  "recommendation": "advice",
   "confidence": 0.85
 }}
 
 TEXT:
 {text}"""
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {self.chatgpt_key}",
-                "Content-Type": "application/json",
-            }
-
-            payload = {
-                "model": "gpt-5-nano",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.7,
-                "max_completion_tokens": 800
-            }
-
-            async with session.post(
-                "https://api.openai.com/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
-            ) as resp:
-                if resp.status != 200:
-                    logger.error(await resp.text())
-                    return None
-
-                data = await resp.json()
-
-                # ---- FIX ----
-                choices = data.get("choices", [])
-                if not choices:
-                    return None
-
-                msg = choices[0].get("message", {})
-                content = msg.get("content", "")
-
-                if not content:
-                    return None
-
-                return json.loads(content)
-
-    except Exception as e:
-        logger.error(f"ChatGPT error: {e}")
-        return None
-
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {self.chatgpt_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "gpt-5-nano",
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_completion_tokens": 800
+                }
+                logger.debug("📤 Sending request to ChatGPT")
+                async with session.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
+                ) as resp:
+                    logger.info(f"📥 ChatGPT response status: {resp.status}")
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(f"❌ ChatGPT HTTP error {resp.status}: {error_text[:200]}")
+                        return None
+                    result = await resp.json()
+                    try:
+                        choices = result.get("choices", [])
+                        if not choices:
+                            logger.error("❌ No choices in ChatGPT result")
+                            return None
+                        choice = choices[0]
+                        message = choice.get("message", {}) or {}
+                        content = message.get("content", "")
+                        if not content:
+                            logger.error("❌ Empty content from ChatGPT")
+                            return None
+                        logger.debug(f"📝 ChatGPT message: {content[:200]}")
+                        gpt_result = json.loads(content)
+                        logger.info("✅ Successfully parsed ChatGPT JSON")
+                        return gpt_result
+                    except (json.JSONDecodeError, KeyError, TypeError, IndexError) as e:
+                        logger.error(f"❌ ChatGPT parse error: {type(e).__name__}: {e}")
+                        return None
+        except asyncio.TimeoutError:
+            logger.error("❌ ChatGPT timeout")
+            return None
+        except Exception as e:
+            logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
+            return None
+            
 # ════════════════════════════════════════
 # ГЛОБАЛЬНЫЙ LLM ПРОВАЙДЕР
 # ════════════════════════════════════════
@@ -603,5 +596,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
