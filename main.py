@@ -282,37 +282,36 @@ class LLMProvider:
     # CHATGPT (OpenAI)
     # ════════════════════════════════════════
     
-    async def _analyze_chatgpt(self, text: str) -> Optional[dict]:
+async def _analyze_chatgpt(self, text: str) -> Optional[dict]:
     """ChatGPT API (OpenAI) с gpt-5-nano и max_completion_tokens"""
-    
+
     prompt = f"""Analyze this phone call text for scam/fraud in Russian context.
 
 Determine:
 1. Fraud type (credit/sim_swap/investment/utility/lottery/legitimate/unknown)
 2. Risk level (low/medium/high)
 3. Scam indicators (3-5 items)
-4. Recommendation for user
+4. Recommendation
 
-Answer ONLY as JSON (no markdown):
+Answer ONLY JSON:
 {{
   "fraud_type": "...",
-  "risk_level": "low|medium|high",
-  "red_flags": ["flag1", "flag2"],
-  "recommendation": "advice",
+  "risk_level": "low",
+  "red_flags": ["flag1"],
+  "recommendation": "...",
   "confidence": 0.85
 }}
 
 TEXT:
 {text}"""
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             headers = {
                 "Authorization": f"Bearer {self.chatgpt_key}",
                 "Content-Type": "application/json",
             }
-            
-            # ✅ ИСПРАВКА: Используем max_completion_tokens вместо max_tokens
+
             payload = {
                 "model": "gpt-5-nano",
                 "messages": [
@@ -321,57 +320,34 @@ TEXT:
                 "temperature": 0.7,
                 "max_completion_tokens": 800
             }
-            
-            logger.debug("📤 Sending request to ChatGPT")
-            
+
             async with session.post(
                 "https://api.openai.com/v1/chat/completions",
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=ANALYSIS_TIMEOUT)
             ) as resp:
-                logger.info(f"📥 ChatGPT response status: {resp.status}")
-                
                 if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"❌ ChatGPT HTTP error {resp.status}: {error_text[:200]}")
+                    logger.error(await resp.text())
                     return None
-                
-                result = await resp.json()
-                
-                # Парсим JSON безопасно
-                try:
-                    if not isinstance(result, dict):
-                        logger.error(f"❌ Result is not dict: {type(result)}")
-                        return None
-                    
-                    choices = result.get("choices", [])
-                    if not isinstance(choices, list) or len(choices) == 0:
-                        logger.error(f"❌ No choices in result")
-                        return None
-                    
-                    first_choice = choices  # Это словарь
-                    message = first_choice.get("message", {})
-                    content = message.get("content", "")
-                    
-                    if not content:
-                        logger.error("❌ Empty content from ChatGPT")
-                        return None
-                    
-                    logger.debug(f"📝 ChatGPT message: {content[:200]}")
-                    gpt_result = json.loads(content)
-                    logger.info(f"✅ Successfully parsed ChatGPT JSON")
-                    return gpt_result
-                    
-                except (json.JSONDecodeError, KeyError, TypeError, IndexError) as e:
-                    logger.error(f"❌ ChatGPT parse error: {type(e).__name__}: {e}")
+
+                data = await resp.json()
+
+                # ---- FIX ----
+                choices = data.get("choices", [])
+                if not choices:
                     return None
-    
-    except asyncio.TimeoutError:
-        logger.error("❌ ChatGPT timeout")
-        return None
+
+                msg = choices[0].get("message", {})
+                content = msg.get("content", "")
+
+                if not content:
+                    return None
+
+                return json.loads(content)
+
     except Exception as e:
-        logger.error(f"❌ ChatGPT exception: {type(e).__name__}: {e}")
+        logger.error(f"ChatGPT error: {e}")
         return None
 
 # ════════════════════════════════════════
@@ -627,4 +603,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
